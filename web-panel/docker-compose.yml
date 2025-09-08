@@ -1,0 +1,207 @@
+version: '3.8'
+
+services:
+  # Banco de dados PostgreSQL
+  postgres:
+    image: postgres:15
+    container_name: clamav-ui-postgres
+    environment:
+      POSTGRES_DB: clamav_ui
+      POSTGRES_USER: clamav_user
+      POSTGRES_PASSWORD: secure_password_123
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./database/init.sql:/docker-entrypoint-initdb.d/init.sql
+    ports:
+      - "5432:5432"
+    networks:
+      - clamav-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U clamav_user -d clamav_ui"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Redis para cache e filas
+  redis:
+    image: redis:7-alpine
+    container_name: clamav-ui-redis
+    command: redis-server --appendonly yes --requirepass redis_password_123
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    networks:
+      - clamav-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "--raw", "incr", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Backend da aplicação
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: clamav-ui-backend
+    environment:
+      - SECRET_KEY=your-super-secret-key-change-in-production
+      - JWT_SECRET_KEY=jwt-super-secret-key-change-in-production
+      - DATABASE_URL=postgresql://clamav_user:secure_password_123@postgres:5432/clamav_ui
+      - REDIS_URL=redis://:redis_password_123@redis:6379
+      - DEBUG=false
+      - LOG_LEVEL=INFO
+      - CLAMD_HOST=localhost
+      - CLAMD_PORT=3310
+      - QUARANTINE_PATH=/var/quarantine/clamav
+      - SMTP_HOST=localhost
+      - SMTP_PORT=587
+      - ALERT_EMAIL_RECIPIENTS=["admin@example.com"]
+    volumes:
+      - quarantine_data:/var/quarantine/clamav
+      - clamav_logs:/var/log/clamav
+      - virus_db:/var/lib/clamav
+    ports:
+      - "8000:8000"
+      - "3310:3310"
+    networks:
+      - clamav-network
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Frontend da aplicação
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: clamav-ui-frontend
+    environment:
+      - REACT_APP_API_URL=http://localhost:8000/api/v1
+      - REACT_APP_WS_URL=ws://localhost:8000/ws
+    ports:
+      - "3000:80"
+    networks:
+      - clamav-network
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+  # Nginx como proxy reverso
+  nginx:
+    image: nginx:alpine
+    container_name: clamav-ui-nginx
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf
+      - ./nginx/ssl:/etc/nginx/ssl
+    ports:
+      - "80:80"
+      - "443:443"
+    networks:
+      - clamav-network
+    depends_on:
+      - backend
+      - frontend
+    restart: unless-stopped
+
+  # Worker Celery para tarefas em background
+  celery-worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: clamav-ui-celery-worker
+    command: celery -A app.services.task_service worker --loglevel=info --concurrency=4
+    environment:
+      - SECRET_KEY=your-super-secret-key-change-in-production
+      - JWT_SECRET_KEY=jwt-super-secret-key-change-in-production
+      - DATABASE_URL=postgresql://clamav_user:secure_password_123@postgres:5432/clamav_ui
+      - REDIS_URL=redis://:redis_password_123@redis:6379
+      - DEBUG=false
+      - LOG_LEVEL=INFO
+      - QUARANTINE_PATH=/var/quarantine/clamav
+    volumes:
+      - quarantine_data:/var/quarantine/clamav
+      - clamav_logs:/var/log/clamav
+      - virus_db:/var/lib/clamav
+    networks:
+      - clamav-network
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # Scheduler Celery Beat
+  celery-beat:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: clamav-ui-celery-beat
+    command: celery -A app.services.task_service beat --loglevel=info
+    environment:
+      - SECRET_KEY=your-super-secret-key-change-in-production
+      - JWT_SECRET_KEY=jwt-super-secret-key-change-in-production
+      - DATABASE_URL=postgresql://clamav_user:secure_password_123@postgres:5432/clamav_ui
+      - REDIS_URL=redis://:redis_password_123@redis:6379
+      - DEBUG=false
+      - LOG_LEVEL=INFO
+    networks:
+      - clamav-network
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # Flower para monitoramento do Celery (desenvolvimento)
+  flower:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: clamav-ui-flower
+    command: celery -A app.services.task_service flower --port=5555
+    environment:
+      - SECRET_KEY=your-super-secret-key-change-in-production
+      - DATABASE_URL=postgresql://clamav_user:secure_password_123@postgres:5432/clamav_ui
+      - REDIS_URL=redis://:redis_password_123@redis:6379
+    ports:
+      - "5555:5555"
+    networks:
+      - clamav-network
+    depends_on:
+      - redis
+    restart: unless-stopped
+    profiles:
+      - dev
+
+# Volumes persistentes
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  quarantine_data:
+    driver: local
+  clamav_logs:
+    driver: local
+  virus_db:
+    driver: local
+
+# Rede interna
+networks:
+  clamav-network:
+    driver: bridge
