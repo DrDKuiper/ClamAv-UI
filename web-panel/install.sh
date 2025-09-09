@@ -33,13 +33,60 @@ log_error() {
 check_prerequisites() {
     log_info "Verificando pré-requisitos..."
     
+    # Detectar gerenciador de pacotes (suporta apt e yum/dnf)
+    if command -v apt-get &> /dev/null; then
+        PKG_MANAGER="apt-get"
+        INSTALL_CMD="sudo apt-get install -y"
+        UPDATE_CMD="sudo apt-get update"
+    elif command -v dnf &> /dev/null; then
+        PKG_MANAGER="dnf"
+        INSTALL_CMD="sudo dnf install -y"
+        UPDATE_CMD="" # dnf atualiza automaticamente
+    elif command -v yum &> /dev/null; then
+        PKG_MANAGER="yum"
+        INSTALL_CMD="sudo yum install -y"
+        UPDATE_CMD=""
+    else
+        log_error "Gerenciador de pacotes não suportado. Instale Docker, Docker Compose e Git manualmente."
+        exit 1
+    fi
+
+    # Garantir que os comandos básicos estejam disponíveis
+    if ! command -v curl &> /dev/null; then
+        log_info "Instalando curl..."
+        $UPDATE_CMD
+        $INSTALL_CMD curl
+    fi
+
     # Verificar Docker
     if ! command -v docker &> /dev/null; then
-        log_error "Docker não encontrado. Instalando Docker..."
-        curl -fsSL https://get.docker.com -o get-docker.sh
-        sh get-docker.sh
-        usermod -aG docker $USER
-        log_success "Docker instalado com sucesso"
+        # Cenário Docker-out-of-Docker (DooD): socket existe, mas o cliente não.
+        if [ -S /var/run/docker.sock ]; then
+            log_warning "Docker socket detectado, mas o cliente Docker não. Instalando docker-ce-cli..."
+            if [ "$PKG_MANAGER" = "apt-get" ]; then
+                # Instala dependências para adicionar o repo do Docker
+                sudo apt-get install -y ca-certificates
+                # Adiciona o repositório oficial do Docker
+                sudo install -m 0755 -d /etc/apt/keyrings
+                curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+                sudo chmod a+r /etc/apt/keyrings/docker.gpg
+                echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+                sudo apt-get update
+                # Instala apenas o cliente
+                sudo apt-get install -y docker-ce-cli
+                log_success "Cliente Docker (docker-ce-cli) instalado com sucesso."
+            else
+                log_error "A instalação automática do docker-ce-cli para ${PKG_MANAGER} não é suportada. Instale manualmente."
+                exit 1
+            fi
+        # Cenário normal: Docker não está instalado
+        else
+            log_error "Docker não encontrado. Instalando Docker via script oficial..."
+            curl -fsSL https://get.docker.com -o get-docker.sh
+            sh get-docker.sh
+            sudo usermod -aG docker $USER
+            log_success "Docker instalado com sucesso. Pode ser necessário reiniciar o terminal ou fazer logout/login."
+        fi
     else
         log_success "Docker encontrado: $(docker --version)"
     fi
@@ -47,8 +94,8 @@ check_prerequisites() {
     # Verificar Docker Compose
     if ! command -v docker-compose &> /dev/null; then
         log_error "Docker Compose não encontrado. Instalando..."
-        curl -L "https://github.com/docker/compose/releases/download/v2.21.0/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
-        chmod +x /usr/local/bin/docker-compose
+        sudo curl -L "https://github.com/docker/compose/releases/download/v2.21.0/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
+        sudo chmod +x /usr/local/bin/docker-compose
         log_success "Docker Compose instalado com sucesso"
     else
         log_success "Docker Compose encontrado: $(docker-compose --version)"
@@ -57,8 +104,7 @@ check_prerequisites() {
     # Verificar Git
     if ! command -v git &> /dev/null; then
         log_error "Git não encontrado. Instalando Git..."
-        apt-get update
-        apt-get install -y git
+        $INSTALL_CMD git
         log_success "Git instalado com sucesso"
     else
         log_success "Git encontrado: $(git --version)"
@@ -68,11 +114,13 @@ check_prerequisites() {
     log_info "Verificando recursos do sistema..."
     
     # RAM disponível
-    RAM_GB=$(free -g | awk '/^Mem:/{print $2}')
-    if [ $RAM_GB -lt 4 ]; then
-        log_warning "RAM disponível: ${RAM_GB}GB (recomendado: 4GB+)"
-    else
-        log_success "RAM disponível: ${RAM_GB}GB"
+    if command -v free &> /dev/null; then
+        RAM_GB=$(free -g | awk '/^Mem:/{print $2}')
+        if [ $RAM_GB -lt 4 ]; then
+            log_warning "RAM disponível: ${RAM_GB}GB (recomendado: 4GB+)"
+        else
+            log_success "RAM disponível: ${RAM_GB}GB"
+        fi
     fi
     
     # Espaço em disco
@@ -314,8 +362,9 @@ run_initial_setup() {
     # Executar migrations
     docker-compose exec -T backend alembic upgrade head
     
-    # Criar usuário admin (já incluído no start.sh)
-    log_info "Usuário administrador padrão será criado automaticamente"
+    # Criar usuário admin
+    log_info "Criando usuário administrador padrão..."
+    docker-compose exec -T backend python -c "from app.core.database import get_db; from app.models.user import User; from app.services.user_service import UserService; db = next(get_db()); user_service = UserService(db); user_service.create_initial_user()"
     
     log_success "Configuração inicial concluída"
 }
@@ -368,6 +417,13 @@ main() {
     # Trap para limpeza em caso de erro
     trap cleanup_on_error ERR
     
+    # Adiciona sudo se não for root
+    if [[ $EUID -ne 0 ]]; then
+        alias sudo='sudo'
+    else
+        alias sudo=''
+    fi
+
     # Menu de confirmação
     log_warning "Este script irá:"
     echo "  ✓ Verificar e instalar pré-requisitos (Docker, Docker Compose, Git)"
