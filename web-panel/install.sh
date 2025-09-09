@@ -365,12 +365,6 @@ main() {
     echo "================================================"
     echo
     
-    # Verificar se está rodando como root
-    if [[ $EUID -eq 0 ]]; then
-        log_error "Não execute este script como root!"
-        exit 1
-    fi
-    
     # Trap para limpeza em caso de erro
     trap cleanup_on_error ERR
     
