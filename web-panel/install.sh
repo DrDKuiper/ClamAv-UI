@@ -38,7 +38,7 @@ check_prerequisites() {
         log_error "Docker não encontrado. Instalando Docker..."
         curl -fsSL https://get.docker.com -o get-docker.sh
         sh get-docker.sh
-        sudo usermod -aG docker $USER
+        usermod -aG docker $USER
         log_success "Docker instalado com sucesso"
     else
         log_success "Docker encontrado: $(docker --version)"
@@ -47,8 +47,8 @@ check_prerequisites() {
     # Verificar Docker Compose
     if ! command -v docker-compose &> /dev/null; then
         log_error "Docker Compose não encontrado. Instalando..."
-        sudo curl -L "https://github.com/docker/compose/releases/download/v2.21.0/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
-        sudo chmod +x /usr/local/bin/docker-compose
+        curl -L "https://github.com/docker/compose/releases/download/v2.21.0/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
+        chmod +x /usr/local/bin/docker-compose
         log_success "Docker Compose instalado com sucesso"
     else
         log_success "Docker Compose encontrado: $(docker-compose --version)"
@@ -57,8 +57,8 @@ check_prerequisites() {
     # Verificar Git
     if ! command -v git &> /dev/null; then
         log_error "Git não encontrado. Instalando Git..."
-        sudo apt-get update
-        sudo apt-get install -y git
+        apt-get update
+        apt-get install -y git
         log_success "Git instalado com sucesso"
     else
         log_success "Git encontrado: $(git --version)"
