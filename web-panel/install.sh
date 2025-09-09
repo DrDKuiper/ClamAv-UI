@@ -217,10 +217,11 @@ ALERT_EMAIL_RECIPIENTS=["admin@example.com"]
 EOF
 
     # Atualizar docker-compose.yml com senhas geradas
-    sed -i "s/secure_password_123/${DB_PASSWORD}/g" docker-compose.yml
-    sed -i "s/redis_password_123/${REDIS_PASSWORD}/g" docker-compose.yml
-    sed -i "s/your-super-secret-key-change-in-production/${SECRET_KEY}/g" docker-compose.yml
-    sed -i "s/jwt-super-secret-key-change-in-production/${JWT_SECRET_KEY}/g" docker-compose.yml
+    # Usar | como delimitador para evitar problemas com caracteres especiais
+    sed -i "s|secure_password_123|${DB_PASSWORD}|g" docker-compose.yml
+    sed -i "s|redis_password_123|${REDIS_PASSWORD}|g" docker-compose.yml
+    sed -i "s|your-super-secret-key-change-in-production|${SECRET_KEY}|g" docker-compose.yml
+    sed -i "s|jwt-super-secret-key-change-in-production|${JWT_SECRET_KEY}|g" docker-compose.yml
     
     log_success "Ambiente configurado com chaves seguras geradas"
     
